@@ -16,7 +16,7 @@ This repository contains most of my projects for bachelors degree at Faculty of 
 
 - [IAL](./IAL/)
 - [IFJ](https://github.com/ilbinek/ifj)
-- [ISS](https://github.com/solumath/IIS-Zvireci-utulek)
+- [ISS](./ISS/)
 
 ## 4. semester
 
@@ -26,7 +26,7 @@ This repository contains most of my projects for bachelors degree at Faculty of 
 
 ## 5. semester
 
-- [IIS](./IIS/)
+- [IIS](https://github.com/solumath/IIS-Zvireci-utulek)
 - [IMS](./IMS/)
 - [ISA](./ISA/)
 
