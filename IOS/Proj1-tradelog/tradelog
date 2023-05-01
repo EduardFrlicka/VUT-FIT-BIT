@@ -1,0 +1,388 @@
+#!/bin/sh
+export POSIXLY_CORRECT=yes
+export LC_ALL=C
+
+# IOS project 1
+# assigment:  https://www.fit.vutbr.cz/study/courses/IOS/private/Lab/projekty/projekt1/projekt1.html.cs
+# Author: Eduard Frlicka xfrlic00
+
+#===================================== Usage
+usage() {
+    echo "Usage: ./tradelog [-h|--help] [FILTER] [COMMAND] [LOG [LOG2 [...]]
+    Analyzes market logs.
+      
+    Reads .log or .gz files, filters and analyzes data.
+    If no file (LOG) specified, reads data from stdin.
+    If no command specified, prints data after applying filters.
+    If no command and no filter specified, prints content of specified files (or stdin).
+        -Data are not sorting. Printing in order in which was specified/read. 
+
+    Options:
+        Filters:
+          -a DATETIME   : Script will restrict data based on date and time. This filter allows just data after DATETIME .
+          -b DATETIME   : Script will restrict data based on date and time. This filter allows just data before DATETIME.
+          -t TICKER     : Script will restrict data based on ticker name. This filter allows just data which has ticker same as TICKER.
+                          When combining -t filters script will allow data which satisfy at least one -t filter  .
+          -w WIDTH      : Sets max width of graph. Affets just hist-ord and graph-pos.
+        
+        Commands:
+          list-tick     : Prints list of tickers mentioned in data.
+          profit        : Prints profit from all transactions rounded to 2 decimals.
+          pos           : Prints value of currently held assets. Sorted in descending order by value. 
+          last-price    : Prints list of last known prize for each ticker. 
+          hist-ord      : Prints histogram of transactions for each ticekr.
+          graph-pos     : Prints graph of currently held assets.
+
+    If not specified output is sorted alphabetically by tickers.
+
+Author: Eduard Frlicka, xfrlic00"
+}
+
+#===================================== Regex chexking functions for parameters
+ticker_check() {
+    if ! echo "$1" | grep -q -E "^[^[:space:];]+$"; then # in ticker is allowed any character except whitespace or ";"
+        echo "Wrong Ticker format. <$1> is not valid ticker"
+        exit 1
+    fi
+}
+
+date_time_check() {
+    if ! echo "$1" | grep -q -E "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$"; then # datetime has to be in format "YYYY-MM-DD HH:MM:SS"
+        echo "Wrong date time format. <$1> is not valid date-time, right format is \"YYYY-MM-DD HH:MM:SS\""
+        exit 1
+    fi
+}
+
+width_check() {
+    if ! echo "$1" | grep -q -E "^[+]?[0-9]+$"; then # just check if it is positive number
+        echo "Wrong width format. <$1> is not valid number"
+        exit 1
+    fi
+}
+
+arg_count_check() { # 1-number needed, 2-number avaliable, 3-parameter name
+    if [ "$1" -gt "$2" ]; then
+        echo "parameter $3 does not have value assigned"
+        exit 1
+    fi
+}
+
+#===================================== Some global variables
+arg_width=""
+arg_ticker=""
+arg_after=""
+arg_before=""
+mode=""
+#===================================== Argument parsing
+while [ $# -gt 0 ]; do # while there is not processed argument. Using "shift" command provides "iterating" through all arguments from command line
+    key="$1"           # probbably useless substitution
+    case $key in
+    -h | --help) # help
+        usage
+        exit 0
+        ;;
+
+    -t) # ticker filter
+        arg_count_check 2 "$#" "-t"
+        ticker_check "$2"
+        if [ -z "$arg_ticker" ]; then
+            arg_ticker="$2"
+        else
+            arg_ticker="$arg_ticker|$2" # in case of multiple ticker filters joining them with "|" simplifying creating regex for filter applying
+        fi
+        shift 2
+        ;;
+
+    -a) # after filter
+        arg_count_check 2 "$#" "-a"
+        date_time_check "$2"
+        if [ "$(expr "$2" "<" "$arg_after")" != "1" ] || [ -z "$arg_after" ]; then # in case of multiple after filters is important just the "latest" one.
+            arg_after="$2"
+        fi
+        shift 2
+        ;;
+
+    -b) # before filter
+        arg_count_check 2 "$#" "-b"
+        date_time_check "$2"
+        if [ "$(expr "$2" ">" "$arg_before")" != "1" ] || [ -z "$arg_before" ]; then # in case of multiple before filters is important just the "earliest" one.
+            arg_before="$2"
+        fi
+        shift 2
+        ;;
+
+    -w)
+        arg_count_check 2 "$#" "-w"
+        width_check "$2"
+        if [ -n "$arg_width" ]; then # in case of multiple width filters raises error. Allowed is just one (or none)
+            echo "Multiple occurrence of filter [-w WIDTH]. Allowed at most one." 1>&2
+            echo "For help please use ./tradelog --help" 1>&2
+            exit 1
+        fi
+        arg_width="$2"
+        shift 2
+        ;;
+
+    list-tick | profit | pos | last-price | hist-ord | graph-pos) # commands
+        if [ -n "$mode" ]; then                                   # in case of multiple commands, raises error
+            echo "Multiple occurrence of command. Allowed at most one." 1>&2
+            echo "For help please use ./tradelog --help" 1>&2
+            exit 1
+        fi
+        mode="$1"
+        shift 1
+        ;;
+
+    *)
+        if [ ! -f "$1" ]; then
+            echo "Bad argument or file does not exist" 1>&2
+            echo "For help please use ./tradelog --help" 1>&2
+            exit 1
+        fi
+        arg_files="$arg_files $1"
+        shift
+        ;;
+    esac
+done
+
+#===================================== data reading
+data=""
+for file in $arg_files; do
+    if [ ! -r "$file" ]; then # checking if file is readable
+        echo "File $file is not readable" 1>&2
+        exit 2
+    fi
+    case $file in # deciding whether use cat or zcat by suffix.
+    *.gz)         # if suffix is .gz => using zcat
+        if [ -z "$data" ]; then
+            data="$(zcat "$file")"
+        else
+            data="$data
+$(zcat "$file")"
+        fi
+        ;;
+    *) # by default using cat
+        if [ -z "$data" ]; then
+            data="$(cat "$file")"
+        else
+            data="$data
+$(cat "$file")"
+        fi
+        ;;
+    esac
+done
+
+if [ -z "$arg_files" ]; then # if no file was specified, reading data from stdin
+    data=$(cat)
+fi
+
+#===================================== data filtering
+if [ -n "$arg_ticker" ]; then
+    data="$(echo "$data" | awk -F';' -v var="^($arg_ticker)$" '$2 ~ var {if($0) print}')" # applying ticker filter
+fi
+
+if [ -n "$arg_before" ]; then
+    data="$(echo "$data" | awk -F';' -v var="$arg_before" '$1 < var {if($0) print}')" # applying date-time filter (before "-b")
+fi
+
+if [ -n "$arg_after" ]; then
+    data="$(echo "$data" | awk -F';' -v var="$arg_after" '$1 > var {if($0) print}')" # applying date-time filter (after "-a")
+fi
+
+#===================================== data processing + printing output (basically some awk magic :D)
+#   all awk code is rewritten in comments for better reading
+case $mode in
+profit)
+    echo "$data" | awk -F';' 'BEGIN {sum=0} {if($3=="buy") sum-=$4*$6; else sum+=$4*$6 } END { printf "%.2f\n", sum }'
+
+    # BEGIN {
+    #     sum=0
+    # }
+    # {
+    #     if($3=="buy")
+    #         sum-=$4*$6;
+    #     else
+    #         sum+=$4*$6
+    #     }
+    # END {
+    #     printf "%.2f\n", sum
+    # }
+    ;;
+
+list-tick)
+    echo "$data" | awk -F';' '{ array[$2]=0 } END { for (i in array) if(i) print i }' | sort
+
+    # {
+    #     array[$2]=0
+    # }
+    # END {
+    #     for (i in array)
+    #         if(i)
+    #             print i
+    # }
+    ;;
+
+pos)
+    echo "$data" | awk -F';' '{ if($3=="buy") pos[$2]+=$6; else pos[$2]-=$6; last[$2]=$4} END { for (i in pos) if(i) printf "%s:%.2f\n",i,pos[i]*last[i]}' |
+        awk -F':' 'BEGIN {max = 0} {max = length($2) > max ? length($2):max; out[$1]=$2} END {for (i in out) printf "%-10s: %*.2f\n",i,max,out[i]}' | sort -t: -nrk2
+
+    # FIRST AWK
+    # {
+    #     if($3=="buy")
+    #         pos[$2]+=$6;
+    #     else
+    #         pos[$2]-=$6;
+    #     last[$2]=$4
+    # }
+    # END {
+    #     for (i in pos)
+    #         if(i)
+    #             printf "%s:%.2f\n",i,pos[i]*last[i]
+    # }
+
+    # SECOND AWK
+    # BEGIN {
+    #     max = 0
+    # }
+    # {
+    #     max = length($2) > max ? length($2):max;
+    #     out[$1]=$2
+    # }
+    # END {
+    #     for (i in out)
+    #         printf "%-10s: %*.2f\n",i,max,out[i]
+    # }
+    ;;
+
+last-price)
+    echo "$data" | awk -F';' '{ last[$2]=$4} END { for (i in last) if(i) printf "%s:%.2f\n",i,last[i]}' |
+        awk -F':' 'BEGIN {max = 0} {max = length($2) > max ? length($2):max; out[$1]=$2} END {for (i in out) printf "%-10s: %*.2f\n",i,max,out[i]}' | sort
+
+    # FIRST AWK
+    # {
+    #     last[$2]=$4
+    # }
+    # END {
+    #     for (i in last)
+    #         if(i) printf "%s:%.2f\n",i,last[i]
+    # }
+
+    # SECOND AWK
+    # BEGIN {
+    #     max = 0
+    # }
+    # {
+    #     max = length($2) > max ? length($2):max;
+    #     out[$1]=$2
+    # }
+    # END {
+    #     for (i in out)
+    #         printf "%-10s: %*.2f\n",i,max,out[i]
+    # }
+    ;;
+
+graph-pos)
+    echo "$data" | awk -F';' '{ if($3=="buy") pos[$2]+=$6; else pos[$2]-=$6; last[$2]=$4} END { for (i in pos) if(i) printf "%s:%.2f\n",i,pos[i]*last[i]}' |
+        awk -F':' -v width="$arg_width" 'function abs(v) {return v < 0 ? -v : v} 
+        BEGIN {max = 0} {max = abs($2) > max ? abs($2):max; out[$1]=$2} 
+        END { for (ticker in out){ printf "%-10s:", ticker; char = out[ticker] > 0 ? "#" : "!"; 
+        char_count = width ? abs(out[ticker])*width/max : abs(out[ticker])/1000;
+        if(char_count >= 1) printf " ";
+        for(i = 1; i <= char_count; i++) printf "%c",char;
+        printf "\n"; } }' | sort
+
+    # num = abs(out[ticker]); if((num - step) >= 0) printf " ";
+    #    while (truncate((num-=step),10)>=0){ k=0; printf "%c",char; }
+
+    # FIRST AWK
+    # {
+    #     if($3=="buy")
+    #         pos[$2]+=$6;
+    #     else
+    #         pos[$2]-=$6;
+    #     last[$2]=$4
+    # }
+    # END {
+    #     for (i in pos)
+    #         if(i)
+    #             printf "%s:%.2f\n",i,pos[i]*last[i]
+    # }
+
+    # SECOND AWK
+    # function abs(v) {return v < 0 ? -v : v}
+    # function truncate(num, decimals){return int(num * 10 ^ decimals)/10^decimals}
+    # BEGIN {
+    #     max = 0
+    # }
+    # {
+    #     max = abs($2) > max ? abs($2):max;
+    #     out[$1]=$2;
+    # }
+    # END {
+    #     for (ticker in out){
+    #         printf "%-10s:", ticker;
+    #         char = out[ticker] > 0 ? "#" : "!";
+    #         char_count = width ? abs(out[ticker])*width/max : abs(out[ticker])/1000;
+    #         if(char_count >= 1)
+    #             printf " ";
+    #         for(i = 1; i <= char_count; i++)
+    #             printf "%c",char;
+    #         printf "\n";
+    #     }
+    # }
+
+    ;;
+
+hist-ord)
+    echo "$data" | awk -F';' '{ trans[$2]++ } END { for (i in trans) if(i) printf "%s:%.2f\n",i,trans[i]}' |
+        awk -F':' -v width="$arg_width" 'function abs(v) {return v < 0 ? -v : v} 
+        BEGIN {max = 0} {max = abs($2) > max ? abs($2):max; out[$1]=$2} 
+                END { for (ticker in out){ printf "%-10s:", ticker; char = out[ticker] > 0 ? "#" : "!"; 
+        char_count = width ? abs(out[ticker])*width/max : abs(out[ticker]);
+        if(char_count >= 1) printf " ";
+        for(i = 1; i <= char_count; i++) printf "%c",char;
+        printf "\n"; } }' | sort
+
+    # END {step = width ? truncate(max/width,10) : 1; for (i in out){ printf "%-10s:", i; char = out[i] > 0 ? "#" : "!"; num = abs(out[i]); if((num - step) >= 0) printf " ";
+    # while (truncate((num-=step),10)>=0){ k=0; printf "%c",char; } printf "\n"; } }' | sort
+
+    # FIRST AWK
+    # {
+    #     trans[$2]++
+    # }
+    # END {
+    #     for (i in trans)
+    #         if(i)
+    #             printf "%s:%.2f\n",i,trans[i]
+    # }
+
+    # SECOND AWK
+    # function abs(v) {return v < 0 ? -v : v}
+    # function truncate(num, decimals){return int(num * 10 ^ decimals)/10^decimals}
+    # BEGIN {
+    #     max = 0
+    # }
+    # {
+    #     max = abs($2) > max ? abs($2):max;
+    #     out[$1]=$2;
+    # }
+    # END {
+    #     for (ticker in out){
+    #         printf "%-10s:", ticker;
+    #         char = out[ticker] > 0 ? "#" : "!";
+    #         char_count = width ? abs(out[ticker])*width/max : abs(out[ticker]);
+    #         if(char_count >= 1)
+    #             printf " ";
+    #         for(i = 1; i <= char_count; i++)
+    #             printf "%c",char;
+    #         printf "\n";
+    #     }
+    # }
+    ;;
+
+*) #   default option, should happen just if no command selected => printing data
+    echo "$data"
+    ;;
+esac
+
+exit 0

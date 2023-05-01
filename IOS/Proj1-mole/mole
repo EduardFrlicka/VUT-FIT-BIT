@@ -1,0 +1,233 @@
+#!/bin/sh
+
+export POSIXLY_CORRECT=yes
+export LC_ALL=C
+
+r_flag=false
+d_flag=false
+
+
+error(){
+    echo 1>&2 "$1"
+    exit 1
+}
+
+usage() {
+    echo "mole -h
+mole [-g GROUP] FILE
+mole [-m] [FILTERS] [DIRECTORY]
+mole list [FILTERS] [DIRECTORY]
+
+FILTERS
+    [-g GROUP1[,GROUP2[,...]]] – Specifikace skupin. Soubor bude uvažován (pro potřeby otevření nebo výpisu) pouze tehdy, pokud jeho spuštění spadá alespoň do jedné z těchto skupin.
+    [-a DATE] - Záznamy o otevřených (editovaných) souborech před tímto datem nebudou uvažovány.
+    [-b DATE] - Záznamy o otevřených (editovaných) souborech po tomto datu nebudou uvažovány.
+    Argument DATE je ve formátu YYYY-MM-DD.
+"
+}
+
+# error if MOLE_RC is unset
+[ -z "$MOLE_RC" ] && error "unset MOLE_RC"
+
+# if MOLE_RC does not exist, create one
+MOLE_RC_DIR=$(dirname "$MOLE_RC") 
+[ ! -d "$MOLE_RC_DIR" ] && mkdir -p "$MOLE_RC_DIR"
+[ ! -f "$MOLE_RC" ] && touch "$MOLE_RC"
+
+# setting EDITOR
+[ -z "$EDITOR" ] && EDITOR=VISUAL
+[ -z "$EDITOR" ] && EDITOR="vi"
+
+while [ $# -gt 0 ]; do
+    if getopts "hmrda:b:g:" arg; then
+        case $arg in
+            a)
+            FILTERS="$FILTERS \$2 <= \"${OPTARG}_99\" {next}"
+            ;;
+
+            b)
+            FILTERS="$FILTERS \$2 >= \"${OPTARG}_00/\" {next}"
+            ;;
+            
+            g)
+            [ -n "$group_arg" ] && error "multiple g argument"
+            group_arg="$OPTARG"
+            ;;
+
+            r)
+            r_flag=true
+            ;;
+
+            d)
+            d_flag=true
+            ;;
+
+            m)
+            if [ -n "$COMMAND" ]; then
+                error "multiple command"
+            fi
+            COMMAND="most"
+            ;;
+
+            h|?)
+            usage
+            exit 0
+            ;;
+        esac
+        
+        shift $((OPTIND - 1))
+        OPTIND=1
+        
+    else
+        case $1 in
+        list | secret-log)
+            if [ -n "$COMMAND" ]; then
+                error "multiple command"
+            fi
+            COMMAND="$1"
+            shift
+            ;;
+        
+        # default case expecting file for reading
+        *)  
+            if [ -d "$1" ]; then
+                dir=$(realpath -m "$1")
+                [ -n "$dirs" ] && dirs="$dirs;"
+                dirs="$dirs$dir"
+            else
+                file="$1"
+            fi
+            shift
+        ;;
+        esac
+    fi
+done
+
+
+# argument errors
+[ -n "$dirs" ] && [ -n "$file" ] && error "positional argument collision. Cannot enter file and directory"
+$d_flag && [ -n "$group_arg" ] && error "-d and -g arguments collision"
+[ "$COMMAND" = "secret-log" ] && [ -n "$file" ] && error "Cannot combine file and secret-log"
+
+# default dir
+[ "$COMMAND" != "secret-log" ] && [ -z "$file" ] && [ -z "$dirs" ] && dirs="$PWD"
+
+
+# default commands
+[ -z "$COMMAND" ] && [ -n "$dirs" ] && COMMAND='dir'
+[ -z "$COMMAND" ] && COMMAND='file'
+
+
+# group filters
+$d_flag && group_filter="^$"
+[ -n "$group_arg" ] && group_filter="^($(echo "$group_arg" | tr "," "|"))$"
+[ -n "$group_filter" ] && FILTERS="$FILTERS \$4 !~ /$group_filter/ {next}"
+
+# dir filters
+[ -n "$dirs" ] && dir_filter="^($(echo "$dirs" | sed 's;/;\\/;g' | tr ";" "|"))"
+(! $r_flag) && [ -n "$dirs" ] && dir_filter="$dir_filter$"
+[ -n "$dir_filter" ] && FILTERS="$FILTERS \$3 !~ /$dir_filter/ {next}"
+
+
+edit(){
+    log_file="$1"
+    log_dir=$(dirname "$log_file")
+    log_group="$2"
+
+    if echo "$log_group" | grep -q ","; then
+        error "more than one group specified"
+    fi
+
+    log_datetime=$(date "+%Y-%m-%d_%H-%M-%S")
+
+    echo "$log_file;$log_datetime;$log_dir;$log_group" >> "$MOLE_RC"
+
+    $EDITOR "$log_file"
+    exit $?
+}
+
+case "$COMMAND" in
+    file)
+    edit "$file" "$group_arg"
+    exit $?
+    ;;
+    
+    dir)
+    cat "$MOLE_RC" | awk -F ';' "$FILTERS {print}" | sort -t ';' -k1,1 -k2,2r | awk -F ';' 'last!=$1 {last=$1; print}' | sort -t ';' -r -k2,2 | awk -F ';' '{print $1}' | \
+    while read -r file; do
+        if [ -f "$file" ]; then
+            edit "$file"
+            exit $?
+        fi
+    done
+    error "No file found"
+    ;;
+
+    most)
+    cat "$MOLE_RC" | awk -F ';' "$FILTERS {print \$1}" | sort | uniq -c | sort -k1rn,1 -k2,2 | awk '{print $2}' | \
+    while read -r file; do
+        if [ -f "$file" ]; then
+            edit "$file"
+            exit $?
+        fi
+    done
+    error "No file found"
+    ;;
+
+    list)
+    code='{
+        if (last[$1]==$4)
+            next;
+        last[$1]=$4;
+
+        if ($4=="")
+            next;
+        
+        if(groups[$1]!="")
+            groups[$1]=groups[$1]",";
+        groups[$1]=groups[$1]$4
+    }
+
+    END {
+        for (file in last) {
+            if(groups[file]=="")
+                groups[file]="-";
+            
+            cmd="realpath -m --relative-to=" pwd " " file
+            cmd | getline relative
+            close(cmd)
+
+            if(max < length(relative)) 
+                max = length(relative);
+
+            res[relative]=groups[file]
+        }
+        max+=2       
+
+        for (file in res) {
+            printf("%-*s%s\n", max, file":", res[file])
+        }
+    }
+    '
+    cat "$MOLE_RC" | sort -t ";" -k 4 | awk -v pwd="$dirs" -F ';' "$FILTERS $code" | sort -t":" -k1,1df -k2b,2
+    ;;
+
+    secret-log)
+    code='{
+        if(dates[$1]!="")
+            dates[$1]=dates[$1]";";   
+        dates[$1]=dates[$1]$2
+    }
+
+    END {
+        for (file in dates) {
+            printf("%s;%s\n", file, dates[file]);
+        }
+    }
+    '
+
+    [ ! -d "$HOME/.mole" ] && mkdir -p "$HOME/.mole"
+    cat "$MOLE_RC" | sort -t ";" -k2,2 | awk -F ';' "$FILTERS $code" | sort -t":" -k1,1df -k2b,2 | bzip2 -c >"$HOME/.mole/log_${USER}_$(date "+%Y-%m-%d_%H-%M-%S").bz2"
+    ;;
+
+esac

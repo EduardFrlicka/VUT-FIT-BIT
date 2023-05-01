@@ -1,0 +1,98 @@
+\documentclass[11pt]{article}
+
+\usepackage[unicode]{hyperref}
+\usepackage[utf8]{inputenc}
+\usepackage[a4paper,total={18cm,25cm},left=1.5cm,top=2.5cm]{geometry}
+\usepackage{xcolor}
+\usepackage[IL2]{fontenc}
+\usepackage{times}
+\usepackage[czech]{babel}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{amssymb}
+
+\newtheorem{sentence}{Veta}
+
+\title{Úloha 2 - [IAM]}
+\author{Eduard Frlička (xfrlic00)}
+\date
+
+\begin{document}
+\maketitle
+
+Link na zadanie: \href{https://www.umat.fekt.vut.cz/~hlinena/IAM/druhy_ukol.pdf}{https://www.umat.fekt.vut.cz/~hlinena/IAM/druhy\_ukol.pdf}
+
+\section*{Riešenie}
+Čísla z Bosaninej postupnosti môžeme vyjadriť:
+$$ a_{n} = \sum^{n}_{i=1}10^{4(i-1)} \textnormal{ pre } n \in \mathbb{N} \wedge n > 1$$
+Tieto čísla si rozdelíme do 2 skupín, podľa $n$. 
+Pre párne $n$ je to vcelku jednoduché. 
+$$a_2 = 10001 = 137*73 \rightarrow \textnormal{ číslo nieje prvočíslo.}$$
+$$a_{2m} = \sum^{2m}_{i=0}10^{4(i-1)} = (1 + 10000) + (10^8 + 10^{12}) ... (10^{8m-8} + 10^{8m-4}) = $$ 
+$$ = 10001 + 10001 \cdot 10^8 ... 10001 \cdot 10^{8(m-1)} \rightarrow 10001 | a_{2m}$$
+
+Týmto sme dokázali že $a_{2m}$ môžeme vyjadriť ako súčin a teda že je to číslo zložené. \\
+
+Pre nepárne $n$ je to trochu komplikovanejšie:
+$10^{4(i-1)}$ je geometrická postupnosť a teda $a_{2m+1} $ môžeme vyjadriť pomocou súčtového vzorca ako: 
+$ \frac{10^{4\cdot(2m+1)}-1}{10^4-1} = \frac{(10^{4m+2}+1)\cdot(10^{4m+2}-1)}{101 \cdot 99} = \frac{(10^{4m+2}+1)}{101} \cdot \frac{(10^{4m+2}-1)}{99}$
+Potrebujeme dokázať že $\frac{(10^{4m+2}-1)}{99}\in \mathbb{N}$ a teda že $99 | 10^{4m+2} -1$
+Indukciou: \\
+
+\noindent
+$1. \, 10^6-1=999999 = 99 \cdot 10101 \rightarrow 99 | 10^6-1$
+
+\noindent
+$2. \, 99 | 10^{4m+2} -1 \rightarrow 99 | 10^{4m+6} -1 \rightarrow 99 | 10^{4m+6} -1 - (10^{4m+2} -1) \rightarrow$
+
+$ \rightarrow 99 | 10000 \cdot 10^{4m+2} - 10^{4m+2} \rightarrow 99 | 9999 \cdot 10^{4m+2} \rightarrow 99 | 99 \cdot 101 \cdot 10^{4m+2} \rightarrow 99 | 10^{4m+2}-1$ \\
+
+% Čísla $10^{4m+2} - 1$ budú $999999$,$9999999999$,... a teda budú vždy pozostávať z párneho množstva cifier 9, $\rightarrow 99|10^{4m+2} - 1$ 
+Ostáva nám teda už len dokźať že $\frac{(10^{4m+2}+1)}{101} \in \mathbb{N}$ a teda že $101 | 10^{4m+2}+1$.
+
+Indukciou: \\
+
+\noindent
+$ 1. \, 10^6 + 1 = 1000001 = 101 \cdot 9901 \rightarrow 101 | 1000001$ \\
+
+\noindent
+$ 2. \, 101 | 10^{4m+2}+1 \rightarrow 101 | 10^{4m+6} + 1 \rightarrow 101 | 10^{4m+6} + 1 - (10^{4m+2}+1 ) \rightarrow $
+
+$\rightarrow 101 | 10000 \cdot 10^{4m+2} - 10^{4m+2} \rightarrow 101 | 9999 \cdot 10^{4m+2} \rightarrow 101 | 101\cdot 99\cdot 10^{4m+2} \rightarrow 101 | 10^{4m+2}+1 $ \\
+
+Dokázali sme teda že $a_{2m+1}$ môžeme vyjadriť ako súčin a teda že je to číslo zložené.
+
+\subsection*{Záver}
+Všetky čísla $a_n$ sú zložené a teda žiadne z nich nieje prvočíslo.
+%     Všetky čísla 
+%     \begin{sentence}
+%         \label{veta1}
+%         Platí, že po odčítaní 2 rôznych Pankrácových čísel dostaneme Bimbácovo číslo.
+%     \end{sentence}
+%     Pankrácovo číslo vieme vyjadriť ako:
+%     $$ \sum^{n}_{i=0}10^i $$
+
+%     Bimbácovo číslo vieme vyjadtiť ako:
+%     $$ \sum^{n}_{i=i_0}10^i \textnormal{ pre }  i_0>0 $$
+
+%     Rozdiel dvoch Pankrácových čísel (za predpokladu, že odčítavame menšie od väčšieho, resp.  $n > m$) môžme teda zapísať ako:
+%     $$ \sum^{n}_{i=0}10^i - \sum^{m}_{j=0}10^j = 10^0 + 10^1 ... 10^n - 10^0 - 10^1 ... - 10^m = 10^{m+1} + 10^{m+2} ... + 10^n = \sum^{n}_{i=m+1}10^i$$
+%     Platí, že $i_0 > 0$ pretože $m \geq 0 \rightarrow m+1>0 \rightarrow i_0>0$.
+%     \\
+
+%     Pre akékoľvek prirodzené číslo potom vieme povedať (pomocou Dirichletovho princípu), že z množiny $n+1$ Pankrácových čísel budú mať aspoň 2 
+%     rovnaký zvyšok po delení $n$. (Pretože je len $n$ rôznych zvyškov po delení $n$ a vyberáme z $n+1$ čísel).
+%     Povedzme teda, že čísla $c_1$ a $c_2$ majú rovnaký zvyšok po delení číslom $n$ a že obe sú Pankrácové čísla.
+%     $$ c_1 > c_2: c_1 - c_2 = n \cdot k+z - (n \cdot l +z) = n(k-l)$$
+
+%     Z vety \ref{veta1} vieme, že rozdiel dvoch rôznych Pankrácových čísel je Bimbácovo číslo, a teda vieme tvrdiť, že $n(k-l)$ je tiež Bimbácovo číslo.
+%     Ďalej vieme tvrdiť, že $n | n(k-l)$.
+%     Z toho vyplýva, že pre akékoľvek prirodzené číslo $n$ platí, že existuje Bimbácovo číslo, ktoré je deliteľné číslom $n$, resp. je násobkom $n$.
+%     \\
+
+    \section*{Odpoveď}
+        Servác zašepkal kamarátom že nič nedostanú naspäť.
+%     Servác má pravdu.
+
+
+\end{document}

@@ -1,0 +1,26 @@
+hold_wolf 3
+initial_wolf_count 100
+mutation_rate_wolf 1
+fitness_treshold_wolf 5
+reproduction_age_wolf 5
+reproduction_rate_wolf 4
+
+hold_cougar 3
+initial_cougar_count 100
+mutation_rate_cougar 1
+fitness_treshold_cougar 5
+reproduction_age_cougar 5
+reproduction_rate_cougar 4
+
+hold_sheep 3
+initial_sheep_count 1000
+mutation_rate_sheep 1
+fitness_treshold_sheep 2
+reproduction_age_sheep 3
+reproduction_rate_sheep 1
+
+x 50
+y 50
+
+iterations 1000
+sleep 100

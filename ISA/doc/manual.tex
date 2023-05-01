@@ -1,0 +1,157 @@
+\documentclass{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[a4paper, total={16cm, 24cm}]{geometry}
+\usepackage[czech, slovak]{babel}
+\usepackage{graphicx}
+\usepackage[unicode]{hyperref}
+\usepackage{float}
+
+
+\renewcommand{\tt}[1]{\texttt{#1}}
+
+\begin{document}
+
+
+\begin{titlepage}
+    \begin{center}
+    
+    \includegraphics[width=0.6\textwidth]{fit_logo.eps}
+    
+    \vspace{6cm}
+    
+    \huge{\textbf{ISA\,--\,Síťové aplikace a správa sítí}}
+    \vspace{0.5cm}
+    
+    \Large{\textbf{DOKUMENTÁCIA K PROJEKTU}}
+    \vspace{0.5cm}
+    
+    \Large{\textbf{Přenos souboru skrz skrytý kanál}}
+    \vspace{2cm}
+    
+    \large{\textbf{Eduard Frlička \\ \texttt{\normalsize{\href{mailto:xfrlic00@stud.fit.vutbr.cz}{xfrlic00@stud.fit.vutbr.cz}}}}}
+    \vspace{0.5cm}
+    
+    \vspace{1cm}
+    
+    
+    \end{center}
+    
+    \end{titlepage}
+
+
+\section{Vlastný prenosový protokol}
+Pre správne fungovanie prenosu skrze ICMP pakety je potreba presne určiť strukturu prenosu.
+Každý packet má echo identifikátor nastavený na hodnotu \tt{ECHO\_IDENTIFICATOR 0xEF00}.
+Tým sa odlisuje tento prenosový protokol od ostatných ICMP packetov,
+Hodnota \tt{code} je nastavovaná na jednu z hodnot enumu.
+
+\begin{verbatim}
+enum{
+    initialPacket = 0x2,
+    #define CODE_INITIAL initialPacket
+
+    dataPacket = 0x4,
+    #define CODE_DATA dataPacket
+    
+    terminalPacket = 0x8
+    #define CODE_TERMINAL terminalPacket
+};
+\end{verbatim}
+
+Prvý packet má \tt{code = CODE\_INITIAL}. Server pri prijatí tohto packetu otvorí súbor, alokuje buffer a uloží si štruktúru:
+
+\begin{verbatim}
+struct transmission {
+    uint64_t hash;             /*Hash: primary key*/
+    uint16_t nextSeq;          /*expected sequence number*/
+    uint16_t offset_buff;      /*number of chars already stored in buffer*/
+    FILE *file;                /*Pointer to file for writing*/
+    u_char buff[BUFSIZ];       /*Buffer for writing. Size of "BUFSIZ" from <stdio.h>*/
+    AES_KEY KeyDec;            /*decryption key used by AES_decrypt function*/
+    struct transmission *next; /*pointer to next transmission*/
+};
+
+\end{verbatim}
+
+Táto štruktúra zároveň funguje ako člen zreťazeného zoznamu a teda je možné príjmať viacero súborov naraz.
+Packety ktoré obsahujú data majú \tt{code = CODE\_DATA} a posledný packet (korý je vždy prázdny), má \tt{code = CODE\_TERMINAL}.
+
+\subsection{Vlastná hlavička}
+Za ICMP hlavičkou sa v každom odoslanom packete nachádza hlavička definovaná ako:
+
+\begin{verbatim}
+struct SecretTransmisionProtocolHeader {
+    uint64_t fileHash; /** hash calculated from time and filename */
+    uint16_t datalen;  /** number of bytes before encryption */
+} __attribute__((packed));
+\end{verbatim}
+
+\tt{fileHash} slúži na rozlíšenie prenosov v prípade príjmania viacerých súborov. 
+Je to hash počítaný z názvu súboru a aktuálneho času.
+V prípade kolízie hashu (čo je pri 64 bitovom čísle dosť nepravdepodobné), sa bude prenos započatý neskôr ignorovať.
+\tt{datalen} je počet bytov odoslaných v packete, pred šifrovaním (keďze šifrovanie vyžaduje zarovnanie na 16B).
+
+\section{Implementacia}
+
+\subsection{Argumenty}
+Program najprv parsuje argumenty z konzole.
+Postuone sa prechadza argv pole a kontroluje sa vyskyt prepínačov \tt{-l, -s, -r}. 
+Pri nájdení prepínača podľa potreby načíta hodnotu a pokračuje na ďalší prvok poľa.
+Pokiaľ sa nenájde žiaden očakávaný prepínač, program sa ukončije s chybovou hláškou.
+Na konci sa vyhodnotí ktoré prepínače sa nachádzali na príkazovom riadku, 
+skontroluje sa ich platnosť (napr. či existuje súbor) a zavolá príslušná funkcia,
+podľa toho, či sa našiel prepínač \tt{-l}.
+
+\subsection{Client}
+Modul client sa prevažne skladá z 2 funkcií: \tt{send\_file}, \tt{send\_packet}.
+
+\subsubsection{\tt{send\_file}}
+Funkcia \tt{send\_file} je volaná z mainu. 
+Najprv získa potrebné informácie pre adresu, na ktorú sa bude súbor posielať.
+Inicializuje sa socket a otvorí sa súbor.
+Zistí sa dĺžka súboru (pre progress bar) a vypočíta sa hash (ktorý sa používa na rozlišovanie prenosov).
+Pošle sa prvý packet, so sekvenčným číslom 0 a názvom súboru v datovej časti packetu.
+Následne sa začne čítať súbor po 1024B blokoch.
+Každý blok sa najprv zašifruje, a predá funkcii \tt{send\_packet}.
+Po odoslaní všetkých packetov funkcia uvoľní alokovanú pamäť a zatvorí otvorený súbor.
+
+\subsubsection{\tt{send\_packet}}
+Funkcia alokuje dostatok pamäte pre data, icmp hlavičku a hlavičku protokolu.
+Naplní icmp hlavičku a hlavičku protokolu potrebnými údajmi, prekopíruje dáta do packetu a vypočíta checksum.
+Pomocou volania funkcie \tt{poll} počká až bude môcť odoslať packet na otvorený socket a následne odošle packet.
+Po odoslaní čaká na prijmané packety.
+Každý packet skontroluje a zistí či sa jedná o odpoveď na odoslaný packet. 
+Kontroluje sa \tt{identifier} a \tt{sequence number}.
+Až dôjde očakávaná odpoveď, uvoľní použivanú pamäť.
+
+\subsection{Server}
+Modul odchytáva a spracováva packety pomocou knižnice \tt{pcap}.
+Sledujú sa všetky rozhrania a filter je nastavený na icmp echo request alebo icmp6 echo request.
+
+\subsubsection{Spracovávanie packetov}
+Keďze zachytávame packety z \tt{"any"} rohrania, prvá hlavička je SLL hlavička.
+Zistí sa protokol (IPV4 / IPV6) a skontroluje sa checksum (pri IPV6 je potreba zostavit pseudoheader).
+Pokiaľ je checksum správny, zavolá sa funkcia \tt{handleICMP}.
+
+\subsubsection{\tt{handleICMP}}
+Funkcia prečíta ICMP hlavičku, hlavičku protokolu a skontroluje či má identifikátor správnu hodnotu.
+Skontroluje sekvenčné číslo pokiaľ sa jedná o už inicializovaný prenos.
+Ak je hodnota sekvenčného čísla iná ako očakávana, sa packet buď preskočǐ alebo sa upraví hodnota očakávaného sekvenčného čísla.
+V každom z týchto dvoch prípadov je na štandardný výstup vypísaná chybová hláška a program beží ďalej.
+Následne sa na základe kódu z IMCP hlavičky zavolá jedna z funkcií \tt{handleDataPacket}, 
+\tt{handleInitialPacket}, \tt{handleTerminalPacket}.
+Funkcia \tt{handleTerminalPacket} sa stará o ukončenie prenosu.
+
+\subsubsection{\tt{handleDataPacket}}
+Funkcia dešifruje dáta z packetu, a následne ich zapíče do bufferu pre daný prenos.
+Pokiaľ sa buffer naplní, vyprádzni sa volaním funkcie \tt{writeOut} a prípadné zvyšné dáta sa zapíšu do bufferu.
+
+\subsubsection{\tt{handleInitialPacket}}
+Funkcia alokuje a inicializuje štruktúru pre prenos, otvorí súbor a vypíše informačnú hlášku na štadnardný výstup.
+
+
+\section{Rozsirenie}
+Program podporuje zadanie viacerých súborov po prepínači \tt{-r}.
+
+\end{document}

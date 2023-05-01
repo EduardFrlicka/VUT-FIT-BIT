@@ -1,0 +1,352 @@
+#!/bin/sh
+
+export POSIXLY_CORRECT=yes
+export LC_ALL=C
+
+usage() {
+    echo "corona [-h|--help] [FILTERS] [COMMAND] [LOG [LOG2 [...]]
+Filter, analyze and display statistics given in LOG files sor stdin.
+
+    COMMAND:
+        infected                    — returns numberof infected.
+        merge                       — merge files into one.
+        gender                      — number of infected for each gender.
+        age                         — number of infected for each age group.
+        daily | monthly | yearly    — stats for time each day / month / year
+        countries                   — stats for countries except CZ (missing value is assumed as CZ)
+        districts | regions         — stats for districts / regions (can be changed with -r or -d)
+    
+    FILTERS:
+        -a DATETIME     — accepts logs after DATETIME (included).
+        -b DATETIME     — accepts logs before DATETIME (included).
+        -g GENDER       — accepts logs just for one gender (M|Z)
+    
+    OPTIONS:
+        -s [WIDTH]          — draws graph instead of values. if WIDTH is set, biggest record will have WIDTH number of #.
+        -d DISTRICT_FILE    — instead of LAU 1 code, will print name of district form DISTRICT_FILE.
+        -r REGIONS_FILE     — instead of NUTS 3 code, will print name of region form REGIONS_FILE.
+        -h | --help         — prints this help.
+
+Author: Eduard Frlicka"
+}
+
+HEADER="id,datum,vek,pohlavi,kraj_nuts_kod,okres_lau_kod,nakaza_v_zahranici,nakaza_zeme_csu_kod,reportovano_khs"
+COMMAND=''
+GRAPH=false
+DATA=""
+FILTERS=""
+
+DISTRICTS=""
+REGIONS=""
+
+# check for correct file name
+fileCheck() {
+    if [ ! -f "$1" ]; then
+        echo "Bad argument or file does not exist" 1>&2
+        echo "For help please use ./$0 --help" 1>&2
+        exit 1
+    fi
+}
+
+# check for correct datetime format
+dateCheck() {
+    # checking format YYYY-MM-DD
+    if ! echo "$1" | grep -Eq "^[0-9]{4}-(0[0-9]|1[0-2])-[0-3][0-9]$"; then
+        echo "invalid datetime \"$1\"" 1>&2
+        exit 1
+    fi
+
+    # spliting
+    year="$(echo "$1" | cut -f1 -d-)"
+    month="$(echo "$1" | cut -f2 -d-)"
+    day="$(echo "$1" | cut -f3 -d-)"
+
+    # determining number of days in month
+    case $month in
+    01 | 03 | 05 | 07 | 08 | 10 | 12) max=31 ;;
+    04 | 06 | 09 | 11) max=30 ;;
+    02) max=28 ;;
+    esac
+
+    # checking if day is in range <1, max>
+    if [ "$day" -le 0 ] || [ "$day" -gt "$max" ]; then
+
+        # exception for 29.2 every 4 years
+        if [ $((year % 4)) -ne 0 ] || [ "$month" -ne 2 ] || [ "$day" -ne 29 ]; then
+            echo "invalid datetime \"$1\"" 1>&2
+            exit 1
+        fi
+    fi
+}
+
+# function prints awk, for converting command output to graph.
+# first argiument is default value of one #, second argument is optional max width
+graphAWK() {
+    printf "| awk -F':' -v fix=\"%s\" -v max_count=\"$2\" '" "$1"
+    printf 'function hashes(count){s=sprintf("%%*s", count ,""); gsub(" ", "#", s); printf("%%s", s);}'
+    if [ -n "$2" ]; then
+        printf ' {arr[$1]=$2; if(max < $2) max=$2;} END{for (i in arr) {printf("%%s:", i); hashes(int((arr[i]*max_count)/max)); printf("\\n");}}'
+    else
+        printf ' {printf("%%s:", $1); hashes(int($2/fix)); printf("\\n");}'
+    fi
+    echo "'"
+}
+
+#
+# ARGUMENT PARSING
+#
+
+while [ $# -gt 0 ]; do
+    key="$1"
+    case $key in
+
+    -h | --help) # help
+        usage
+        exit 0
+        ;;
+
+    infected | merge | gender | age | daily | monthly | yearly | countries | districts | regions)
+        if [ -n "$COMMAND" ]; then
+            echo "multiple filter"
+            exit 1
+        fi
+        COMMAND="$key"
+        shift
+        ;;
+
+    -a)
+        shift
+        dateCheck "$1"
+        FILTERS="$FILTERS \$2 < \"$1\" || \$2==\"\"{next}"
+        shift
+        ;;
+
+    -b)
+        shift
+        dateCheck "$1"
+        FILTERS="$FILTERS \$2 > \"$1\" || \$2==\"\"{next}"
+        shift
+        ;;
+
+    -g)
+        shift
+        if [ "$1" != "Z" ] && [ "$1" != "M" ]; then
+            echo "invalid gender \"$1\"" 1>&2
+            exit 1
+        fi
+        FILTERS="$FILTERS \$4!=\"$1\" {next}"
+        shift
+        ;;
+
+    -s)
+        shift
+        if echo "$1" | grep -Eq "^\+?[0-9]+$"; then
+            WIDTH="$1"
+            shift
+        fi
+        GRAPH=true
+        ;;
+
+    -d)
+        shift
+        fileCheck "$1"
+        DISTRICTS="$1"
+        shift
+        ;;
+    -r)
+        shift
+        fileCheck "$1"
+        REGIONS="$1"
+        shift
+        ;;
+
+    # default case expecting file for reading
+    *)
+        fileCheck "$1"
+
+        case $key in
+        *.gz)
+            READ="$READ zcat $key;"
+            ;;
+
+        *.bz2)
+            READ="$READ bzcat $key;"
+            ;;
+
+        *)
+            READ="$READ cat $key;"
+            ;;
+        esac
+
+        shift
+        ;;
+    esac
+done
+
+# default command is merge
+[ -z "$COMMAND" ] && COMMAND='merge'
+
+# default reading from stdin
+[ -z "$READ" ] && READ='cat -'
+
+#skipping, header and emty lines
+AWK_OPTIONS="-F, -vHead=\"$HEADER\""
+BLANK_FILTERS=' $0 ~ Head{next} $0 ~ /^[[:space:]]*$/ {next} '
+END=""
+
+# prints to std err from awk.
+ERR_FUNC='function err(errmsg, line) { print errmsg, line | "cat >&2"; }'
+
+# date validation. Regex check for format YYYY-MM-DD and then check for day
+DATE_VALIDATION_ARRAY='BEGIN{M["01"]=31;M["02"]=28;M["03"]=31;M["04"]=30;M["05"]=31;M["06"]=30;M["07"]=31;M["08"]=31;M["09"]=30;M["10"]=31;M["11"]=30;M["12"]=31;}'
+DATE_VALIDATION='$2 !~ /^[0-9]{4}-(0[0-9]|1[0-2])-[0-3][0-9]$/ && $2!="" {err("Invalid date:", $0); next;} 
+{split($2, a, "-"); day=int(a[3]); if(M[a[2]] < day || day < 0) {if (int(a[1]) % 4 != 0 || day == 29 || a[2] != "02") {err("Invalid date:", $0); next;} } }'
+
+# regex validation of age
+AGE_VALIDATION='$3 !~ /^[0-9]+$/ && $3!="" {err("Invalid age:", $0); next;}'
+
+# concatenation of all validations
+VALIDATION="$ERR_FUNC $DATE_VALIDATION_ARRAY $DATE_VALIDATION $AGE_VALIDATION"
+
+# sorting by first column, then shifting "None" to last line
+SORT="| sort | awk -F':' '\$1 ~ /None/ {None=\$0; next} {print} END{ if(None) print None;}' "
+
+# aligment by longest value on first column.
+ALIGN="| awk -F':' '{arr[\$1]=\$2; if(max < length(\$1)) max = length(\$1);} END{for (i in arr) { printf(\"%-*s:\", max, i, arr[i]); if(arr[i]!=\"\") printf(\" %s\n\", arr[i]); else printf(\"\n\");} }'"
+
+# print function using for printing key:value. no space for easier aligment
+FUNCTION_P='function p(arr, i){ printf "%s:%d\n", i, arr[i] }'
+
+#
+# COMMANDS
+#
+
+case $COMMAND in
+merge)
+    echo "$HEADER"
+    AWK_CODE='{print}'
+    ;;
+
+infected)
+    AWK_CODE='{C+=1} END {print C}'
+    ;;
+
+gender)
+    AWK_FUNCTIONS="$FUNCTION_P"
+    AWK_CODE=' $4==""{$4="None"} {arr[$4]+=1} END { p(arr, "M"); p(arr, "Z"); if(arr["None"]) p(arr, "None");}'
+
+    $GRAPH && END="$(graphAWK 10000 "$WIDTH")"
+    END="$END $ALIGN $SORT"
+    ;;
+
+age)
+    AWK_FUNCTIONS="$FUNCTION_P"
+    AWK_CODE=' $3==""{$3="None"} {arr[$3]++} 
+    END { 
+        for( i = 6; i < 105; i+=10 ){
+            for(j = i; j < i + 10; j++)
+                res[i"-"i+9]+=arr[j];
+        }
+
+        for(j = 0; j <= 5; j++)
+            res["0-5"]+=arr[j];
+
+        res[">105"]=0;
+        for(i in arr){
+            if(i != "None" && int(i) > 105)
+                res[">105"]+=arr[i];
+        }
+
+        for(i in res)
+            p(res, i);
+
+        if(arr["None"])
+            p(arr, "None");
+    }'
+
+    $GRAPH && END="$(graphAWK 10000 "$WIDTH")"
+    END="$END $ALIGN | sort -V | awk -F':' '\$1 ~ /None/ {None=\$0; next} {print} END{ if(None) print None;}'"
+    ;;
+
+daily)
+    AWK_FUNCTIONS="$FUNCTION_P"
+    AWK_CODE='$2==""{$2="None"} {arr[$2]++;} END{for (i in arr) p(arr, i)}'
+
+    $GRAPH && END="$(graphAWK 500 "$WIDTH")"
+    END="$END $ALIGN $SORT"
+    ;;
+
+monthly)
+    AWK_FUNCTIONS="$FUNCTION_P"
+    AWK_CODE='$2==""{$2="None"} {arr[substr($2,1,7)]++;} END{for (i in arr) p(arr, i)}'
+    $GRAPH && END="$(graphAWK 10000 "$WIDTH")"
+    END="$END $ALIGN $SORT"
+    ;;
+
+yearly)
+    AWK_FUNCTIONS="$FUNCTION_P"
+    AWK_CODE='$2==""{$2="None"} {arr[substr($2,1,4)]++;} END{for (i in arr) p(arr, i)}'
+    $GRAPH && END="$(graphAWK 100000 "$WIDTH")"
+    END="$END $ALIGN $SORT"
+    ;;
+
+countries)
+    AWK_FUNCTIONS="$FUNCTION_P"
+    AWK_CODE='$8=="" || $8 == "CZ"{next} {arr[$8]++;} END{for (i in arr) p(arr, i)}'
+    $GRAPH && END="$(graphAWK 100 "$WIDTH")"
+    END="$END $ALIGN $SORT"
+    ;;
+
+districts)
+    AWK_FUNCTIONS="$FUNCTION_P"
+
+    if [ -z "$DISTRICTS" ]; then
+        # districts without name substitution
+        AWK_CODE='$6==""{$6="None"} {arr[$6]++} END{for (i in arr) p(arr, i)}'
+    else
+        # districts with -d (with name substitution)
+        #(reding from file $DISTRICTS to name array, then iterating trough data and END print)
+
+        AWK_OPTIONS="$AWK_OPTIONS -v dist_file=\"$DISTRICTS\""
+        AWK_CODE='BEGIN {getline line < dist_file; while (( getline line < dist_file) > 0 ) 
+            { gsub("\"", "", line); split(line, l, ";"); name[l[4]]=l[2]; } 
+            name["None"]="None";} 
+        $6==""{$6="None"} 
+        { if(name[$6]) arr[$6]++; else {err("Invalid value:", $0); next;} } 
+        END{for (i in arr) printf("%s:%d\n", name[i], arr[i])}'
+    fi
+
+    $GRAPH && END="$(graphAWK 1000 "$WIDTH")"
+    END="$END $ALIGN $SORT"
+    ;;
+
+regions)
+    AWK_FUNCTIONS="$FUNCTION_P"
+
+    if [ -z "$REGIONS" ]; then
+        # regions if there is no -r
+        AWK_CODE='$5==""{$5="None"} {arr[$5]++;} END{for (i in arr) p(arr, i)}'
+    else
+        # regions with -r (with name substitution)
+        #(reding from file $REGIONS to name array, then iterating trough data and END print)
+
+        AWK_OPTIONS="$AWK_OPTIONS -v dist_file=\"$REGIONS\""
+        AWK_CODE='BEGIN {getline line < dist_file; while (( getline line < dist_file) > 0 ) 
+            { gsub("\"", "", line); split(line, l, ";"); name[l[4]]=l[2]; } 
+            name["None"]="None";} 
+        $5==""{$5="None"} 
+        { if(name[$5]) arr[$5]++; else {err("Invalid value:", $0); next;} } 
+        END{for (i in arr) printf("%s:%d\n", name[i], arr[i])}'
+    fi
+
+    $GRAPH && END="$(graphAWK 10000 "$WIDTH")"
+    END="$END $ALIGN $SORT"
+    ;;
+
+esac
+
+#
+# EXECUTION
+#
+
+eval "($READ) | tr -d \"[:blank:]\" | awk $AWK_OPTIONS '$AWK_FUNCTIONS $BLANK_FILTERS $VALIDATION $FILTERS $AWK_CODE' $END"

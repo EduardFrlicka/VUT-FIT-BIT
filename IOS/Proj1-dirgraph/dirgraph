@@ -1,0 +1,121 @@
+#!/bin/sh
+export POSIXLY_CORRECT=yes
+
+# Autor = Frlicka Eduard xfrlic00
+# Datum = 31.3.2020
+# Skript vytvara spravu o zadanom adresari (defaultne pracovny adresar)
+# Prepinace -i pre ignorovanie nazvu
+#           -n pre normalizaciu grafu
+
+usage() { echo "Usage: $0 [-i FILE_ERE] [-n] [DIR]" 1>&2; exit 1; }
+
+ceil() { 
+    eval input=\$"$1"
+    result=$((input * B ))
+    zero=$((result % offset))
+    if [ "$zero" -ne 0 ]; then                       #Scale non zero values
+				result=$(((result / offset) + 1)) # + 1 to cail values
+			else
+                result=$((result / offset))
+            fi
+    eval "$i"=$result
+ }
+
+print_line() { 
+    if [ "$1" -gt 0 ]; then
+        printf '#%.0s' $(seq "$1")
+    fi
+}
+
+key='___NO_GREP_TODAY___'
+input=0
+while getopts "i:n" o; do
+    case "${o}" in
+        i)
+            key=${OPTARG}
+            ;;
+        n)  
+            n="ano"
+            ;;
+        *)
+            usage
+        ;;
+    esac
+done
+
+shift $((OPTIND-1))
+
+if [ -z "$1" ]; then 
+    DIR=$PWD
+else
+    if [ -d "$1" ]; then 
+        DIR=$1
+    else
+        echo "DIR argument was not valid directory" 1>&2; exit 1;
+    fi
+fi
+
+echo Root directory: "$DIR"
+OUTP="$(find "$DIR" -type d)"
+EXIT_CODE=$?
+ND="$(printf '%s' "$OUTP" | grep -v -c -- "$key")"
+OUTP="$(find -L "$DIR" -type l)"
+EXIT_CODE=$EXIT_CODE||$?
+ND=$((ND+$(printf '%s' "$OUTP" | grep -v -c -- "$key")))
+echo Directories: $ND
+OUTP="$(find -L "$DIR" -type f)"
+EXIT_CODE=$EXIT_CODE||$?
+echo All files: "$(printf '%s' "$OUTP" | grep -v -c -- "$key")"
+echo File size histogram:
+
+pocet1=$(find -L "$DIR" -type f -size -99c 2>/dev/null | grep -v -c -- "$key")
+pocet2=$(find -L "$DIR" -type f -size +100c -size -1023c 2>/dev/null | grep -v -c -- "$key")
+pocet3=$(find -L "$DIR" -type f -size +1024c -size -10239c 2>/dev/null | grep -v -c -- "$key")
+pocet4=$(find -L "$DIR" -type f -size +10240c -size -102399c 2>/dev/null | grep -v -c -- "$key")
+pocet5=$(find -L "$DIR" -type f -size +102400c -size -1048575c 2>/dev/null | grep -v -c -- "$key")
+pocet6=$(find -L "$DIR" -type f -size +1048576c -size -10485759c 2>/dev/null | grep -v -c -- "$key")
+pocet7=$(find -L "$DIR" -type f -size +10485760c -size -104857599c 2>/dev/null | grep -v -c -- "$key")
+pocet8=$(find -L "$DIR" -type f -size +104857600c -size -1073741823c 2>/dev/null | grep -v -c -- "$key")
+pocet9=$(find -L "$DIR" -type f -size +1073741824c 2>/dev/null | grep -v -c -- "$key")
+
+if [ "ano" = "$n" ]; then
+    if [ -t 1 ]; then MAX_CHARS=$(($(tput cols)-1))
+    else MAX_CHARS=79
+    fi
+    MAX_CHARS=$((MAX_CHARS-12))
+    maxPocet=0
+    for pocet in $pocet1 $pocet2 $pocet3 $pocet4 $pocet5 $pocet6 $pocet7 $pocet8 $pocet9
+    do
+        if [ "$pocet" -gt "$maxPocet" ]; then
+            maxPocet=$pocet 
+        fi
+    done
+    if [ "$maxPocet" -gt "$MAX_CHARS" ]; then
+        offset=10000
+        B=$((MAX_CHARS*offset/maxPocet))
+        for i in pocet1 pocet2 pocet3 pocet4 pocet5 pocet6 pocet7 pocet8 pocet9; do
+            ceil $i
+        done
+    fi
+fi
+
+printf '  <100 B  : '
+print_line "$pocet1"
+printf '\n  <1 KiB  : '
+print_line "$pocet2"
+printf '\n  <10 KiB : '
+print_line "$pocet3"
+printf '\n  <100 KiB: '
+print_line "$pocet4"
+printf '\n  <1 MiB  : '
+print_line "$pocet5"
+printf '\n  <10 MiB : '
+print_line "$pocet6"
+printf '\n  <100 MiB: '
+print_line "$pocet7"
+printf '\n  <1 GiB  : '
+print_line "$pocet8"
+printf '\n  >=1 GiB : '
+print_line "$pocet9"
+printf "\n"
+exit $EXIT_CODE
